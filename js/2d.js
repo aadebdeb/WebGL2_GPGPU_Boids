@@ -44,7 +44,7 @@ void main(void) {
   o_position = vec2(
     random(gl_FragCoord.xy * 0.013 + random(u_randomSeed * vec2(32.19, 27.51) * 1000.0)),
     random(gl_FragCoord.xy * 0.029 + random(u_randomSeed * vec2(19.56, 11.34) * 1000.0))
-  ) * (u_simulationSpace - 1e-6) + 1e-6 * 0.5;
+  ) * (u_simulationSpace - 1e-5) + 1e-5 * 0.5;
   o_velocity = normalize(vec2(
     random(gl_FragCoord.xy * 0.059 + random(u_randomSeed * vec2(27.31, 16.91) * 1000.0)),
     random(gl_FragCoord.xy * 0.038 + random(u_randomSeed * vec2(25.95, 19.47) * 1000.0))
@@ -97,7 +97,6 @@ void main(void) {
   vec2 nextVelocity = limit(velocity + u_deltaTime * force, u_maxSpeed);
   vec2 nextPosition = position + u_deltaTime * velocity;
 
-
   if (nextPosition.x < 1e-6) {
     nextPosition.x = 1e-6;
     nextVelocity.x *= -1.0;
@@ -115,19 +114,6 @@ void main(void) {
     nextVelocity.y *= -1.0;
   }
 
-  // if (nextPosition.x < 0.0) {
-  //   nextPosition.x += u_simulationSpace.x;
-  // }
-  // if (nextPosition.x > u_simulationSpace.x) {
-  //   nextPosition.x -= u_simulationSpace.x;
-  // }
-  // if (nextPosition.y < 0.0) {
-  //   nextPosition.y += u_simulationSpace.y;
-  // }
-  // if (nextPosition.y > u_simulationSpace.y) {
-  //   nextPosition.y -= u_simulationSpace.y;
-  // }
-
   o_position = nextPosition;
   o_velocity = nextVelocity;
 }
@@ -140,77 +126,32 @@ precision highp float;
 precision highp isampler2D;
 precision highp usampler2D;
 
+// 4294967295 = 2^32 - 1
+#define MAX_32UI 4294967295u
+
 out vec2 o_force;
 
 uniform sampler2D u_positionTexture;
 uniform sampler2D u_velocityTexture;
 uniform usampler2D u_bucketTexture;
-uniform isampler2D u_bucketReferrerTexture;
+uniform usampler2D u_bucketReferrerTexture;
 
 uniform vec3 u_radius; // x: separation, y: alignment: z: cohesion
 uniform vec3 u_weight; // x: separation, y: alignment: z: cohesion
 uniform float u_maxSpeed;
 uniform float u_maxForce;
-
+uniform float u_boundaryIntensity;
 uniform uint u_boidNum;
-uniform uint u_boidTextureSize;
-
 uniform float u_bucketSize;
 uniform ivec2 u_bucketNum;
-
 uniform vec2 u_simulationSpace;
 
 uint convertCoordToIndex(uvec2 coord, uint sizeX) {
   return coord.x + sizeX * coord.y;
 }
 
-ivec2 convertIndexToCoord(int index, int sizeX) {
-  return ivec2(index % sizeX, index / sizeX);
-}
-
-void findNeighbors(vec2 position, ivec2 bucketPosition, ivec2 bucketNum, int particleTextureSizeX, int bucketReferrerTextureSizeX, inout vec3 separation, inout vec3 alignment, inout vec3 cohesion) {
-  if (bucketPosition.x < 0 || bucketPosition.x >= bucketNum.x || bucketPosition.y < 0 || bucketPosition.y >= bucketNum.y) {
-    return;
-  }
-  int bucketIndex = bucketPosition.x + bucketNum.x * bucketPosition.y;
-  ivec2 coord = convertIndexToCoord(bucketIndex, bucketReferrerTextureSizeX);
-
-  ivec2 bucketReferrer = texelFetch(u_bucketReferrerTexture, coord, 0).xy;
-
-  if (bucketReferrer.x == -1 || bucketReferrer.y == -1) {
-    return;
-  }
-
-  for (int i = bucketReferrer.x; i <= bucketReferrer.y; i++) {
-    uvec2 bucket = texelFetch(u_bucketTexture, convertIndexToCoord(i, particleTextureSizeX), 0).xy;
-
-    int particleIndex = int(bucket.y);
-
-    ivec2 particleCoord = convertIndexToCoord(particleIndex, particleTextureSizeX);
-    vec2 otherPos = texelFetch(u_positionTexture, particleCoord, 0).xy;
-    vec2 otherVel = texelFetch(u_velocityTexture, particleCoord, 0).xy;
-
-    float dist = length(position - otherPos);
-
-    if (dist == 0.0) {
-      continue;
-    }
-
-    if (dist < u_radius.x) {
-      separation.xy += normalize(position - otherPos) / dist;
-      separation.z += 1.0;
-    }
-
-    if (dist < u_radius.y) {
-      alignment.xy += otherVel;
-      alignment.z += 1.0;
-    }
-
-    if (dist < u_radius.z) {
-      cohesion.xy += otherPos;
-      cohesion.z += 1.0;
-    }
-  }
+uvec2 convertIndexToCoord(uint index, uint sizeX) {
+  return uvec2(index % sizeX, index / sizeX);
 }
 
 vec2 limit(vec2 v, float max) {
@@ -220,14 +161,50 @@ vec2 limit(vec2 v, float max) {
   return v;
 }
 
-vec2 computeForce() {
+void findNeighbors(vec2 position, ivec2 bucketPosition, ivec2 bucketNum, uint boidTextureSizeX, uint bucketReferrerTextureSizeX, inout vec2 separation, inout vec2 alignment, inout vec3 cohesion) {
+  if (bucketPosition.x < 0 || bucketPosition.x >= bucketNum.x ||
+      bucketPosition.y < 0 || bucketPosition.y >= bucketNum.y) {
+    return;
+  }
+  uint bucketIndex = uint(bucketPosition.x + bucketNum.x * bucketPosition.y);
+  ivec2 coord = ivec2(convertIndexToCoord(bucketIndex, bucketReferrerTextureSizeX));
 
-  ivec2 coord = ivec2(gl_FragCoord.xy);
-  vec2 position = texelFetch(u_positionTexture, coord, 0).xy;
-  vec2 velocity = texelFetch(u_velocityTexture, coord, 0).xy;
+  uvec2 bucketReferrer = texelFetch(u_bucketReferrerTexture, coord, 0).xy;
 
-  int particleTextureSizeX = textureSize(u_positionTexture, 0).x;
-  int bucketReferrerTextureSizeX = textureSize(u_bucketReferrerTexture, 0).x;
+  if (bucketReferrer.x == MAX_32UI || bucketReferrer.y == MAX_32UI) {
+    return;
+  }
+
+  for (uint i = bucketReferrer.x; i <= bucketReferrer.y; i++) {
+    uint boidIndex = texelFetch(u_bucketTexture, ivec2(convertIndexToCoord(i, boidTextureSizeX)), 0).y;
+
+    ivec2 boidCoord = ivec2(convertIndexToCoord(boidIndex, boidTextureSizeX));
+    vec2 otherPos = texelFetch(u_positionTexture, boidCoord, 0).xy;
+
+    float dist = length(position - otherPos);
+
+    if (dist == 0.0) {
+      continue;
+    }
+
+    if (dist < u_radius.x) {
+      separation += normalize(position - otherPos) / dist;
+    }
+
+    if (dist < u_radius.y) {
+      vec2 otherVel = texelFetch(u_velocityTexture, boidCoord, 0).xy;
+      alignment += otherVel;
+    }
+
+    if (dist < u_radius.z) {
+      cohesion.xy += otherPos;
+      cohesion.z += 1.0;
+    }
+  }
+}
+
+vec2 computeForceFromBoids(vec2 position, vec2 velocity, uint boidTextureSizeX) {
+  uint bucketReferrerTextureSizeX = uint(textureSize(u_bucketReferrerTexture, 0).x);
 
   vec2 bucketPosition = position / u_bucketSize;
   int xOffset = fract(bucketPosition.x) < 0.5 ? -1 : 1;
@@ -238,22 +215,22 @@ vec2 computeForce() {
   ivec2 bucketPosition01 = bucketPosition00 + ivec2(0, yOffset);
   ivec2 bucketPosition11 = bucketPosition00 + ivec2(xOffset, yOffset);
 
-  vec3 separation = vec3(0.0);
-  vec3 alignment = vec3(0.0);
+  vec2 separation = vec2(0.0);
+  vec2 alignment = vec2(0.0);
   vec3 cohesion = vec3(0.0);
-  findNeighbors(position, bucketPosition00, u_bucketNum, particleTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
-  findNeighbors(position, bucketPosition10, u_bucketNum, particleTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
-  findNeighbors(position, bucketPosition01, u_bucketNum, particleTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
-  findNeighbors(position, bucketPosition11, u_bucketNum, particleTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
+  findNeighbors(position, bucketPosition00, u_bucketNum, boidTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
+  findNeighbors(position, bucketPosition10, u_bucketNum, boidTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
+  findNeighbors(position, bucketPosition01, u_bucketNum, boidTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
+  findNeighbors(position, bucketPosition11, u_bucketNum, boidTextureSizeX, bucketReferrerTextureSizeX, separation, alignment, cohesion);
 
   vec2 separationForce = vec2(0.0);
-  if (separation.z != 0.0) {
+  if (separation.xy != vec2(0.0)) {
     vec2 desiredVelocity = normalize(separation.xy) * u_maxSpeed;
     separationForce = limit(desiredVelocity - velocity, u_maxForce);
   }
 
   vec2 alignmentForce = vec2(0.0);
-  if (alignment.z != 0.0) {
+  if (alignment.xy != vec2(0.0)) {
     vec2 desiredVelocity = normalize(alignment.xy) * u_maxSpeed;
     alignmentForce = limit(desiredVelocity - velocity, u_maxForce);
   }
@@ -269,35 +246,46 @@ vec2 computeForce() {
   alignmentForce *= u_weight.y;
   cohesionForce *= u_weight.z;
 
-  vec2 forceFromBoids = separationForce + alignmentForce + cohesionForce;
-
-  float boundariesRadius = 0.05;
-
-  vec2 forceFromWalls = vec2(0.0);
-  if (position.x < boundariesRadius) {
-    forceFromWalls += vec2(u_maxForce, 0.0) / position.x;
-  }
-  if (u_simulationSpace.x - position.x < boundariesRadius) {
-    forceFromWalls += vec2(-u_maxForce, 0.0) / (u_simulationSpace.x - position.x);
-  }
-  if (position.y < boundariesRadius) {
-    forceFromWalls += vec2(0.0, u_maxForce) / position.y;
-  }
-  if (u_simulationSpace.y - position.y < boundariesRadius) {
-    forceFromWalls += vec2(0.0, -u_maxForce) / (u_simulationSpace.y - position.y);
-  }
-
-  return limit(forceFromBoids + forceFromWalls, u_maxForce);
   return separationForce + alignmentForce + cohesionForce;
 }
 
+vec2 computeForceFromWalls(vec2 position) {
+  vec2 force = vec2(0.0);
+  if (position.x < u_radius.x) {
+    force += vec2(u_boundaryIntensity, 0.0) / position.x;
+  }
+  if (u_simulationSpace.x - position.x < u_radius.x) {
+    force += vec2(-u_boundaryIntensity, 0.0) / (u_simulationSpace.x - position.x);
+  }
+  if (position.y < u_radius.x) {
+    force += vec2(0.0, u_boundaryIntensity) / position.y;
+  }
+  if (u_simulationSpace.y - position.y < u_radius.x) {
+    force += vec2(0.0, -u_boundaryIntensity) / (u_simulationSpace.y - position.y);
+  }
+  return force;
+}
+
+vec2 computeForce(uint boidTextureSizeX) {
+
+  ivec2 coord = ivec2(gl_FragCoord.xy);
+  vec2 position = texelFetch(u_positionTexture, coord, 0).xy;
+  vec2 velocity = texelFetch(u_velocityTexture, coord, 0).xy;
+
+  vec2 forceFromBoids = computeForceFromBoids(position, velocity, boidTextureSizeX);
+  vec2 forceFromWalls = computeForceFromWalls(position);
+
+  return limit(forceFromBoids + forceFromWalls, u_maxForce);
+}
+
 void main(void) {
-  uint index = convertCoordToIndex(uvec2(gl_FragCoord.xy), u_boidTextureSize);
+  uint boidTextureSizeX = uint(textureSize(u_positionTexture, 0).x);
+  uint index = convertCoordToIndex(uvec2(gl_FragCoord.xy), boidTextureSizeX);
   if (index >= u_boidNum) { // unused pixels
     o_force = vec2(0.0);
     return;
   }
-  o_force = computeForce();
+  o_force = computeForce(boidTextureSizeX);
 }
 `;
 
@@ -380,6 +368,9 @@ const INITIALIZE_BUCKET_FRAGMENT_SHADER_SOURCE =
 
 precision highp float;
 
+// 4294967295 = 2^32 - 1
+#define MAX_32UI 4294967295u
+
 out uvec2 o_bucket;
 
 uniform sampler2D u_positionTexture;
@@ -400,7 +391,7 @@ void main(void) {
   uint positionTextureSizeX = uint(textureSize(u_positionTexture, 0).x);
   uint boidIndex = convertCoordToIndex(uvec2(gl_FragCoord.xy), positionTextureSizeX);
   if (boidIndex >= u_boidNum) {
-    o_bucket = uvec2(65535, 0); // = uvec2(2^16 - 1, 0)
+    o_bucket = uvec2(MAX_32UI, 0); // = uvec2(2^32 - 1, 0)
   }
   vec2 position = texelFetch(u_positionTexture, ivec2(gl_FragCoord.xy), 0).xy;
   uint bucketIndex = getBucketIndex(position);
@@ -462,33 +453,35 @@ void main(void) {
 precision highp float;
 precision highp usampler2D;
 
-out ivec2 o_referrer;
+// 4294967295 = 2^32 - 1
+#define MAX_32UI 4294967295u
 
-uniform ivec2 u_bucketReferrerTextureSize;
+out uvec2 o_referrer;
+
+uniform uvec2 u_bucketReferrerTextureSize;
 uniform usampler2D u_bucketTexture;
-uniform int u_boidNumN;
+uniform uint u_boidNumN;
 uniform uvec2 u_bucketNum;
 
-
-int convertCoordToIndex(ivec2 coord, int sizeX) {
+uint convertCoordToIndex(uvec2 coord, uint sizeX) {
   return coord.x + sizeX * coord.y;
 }
 
-ivec2 convertIndexToCoord(int index, int sizeX) {
-  return ivec2(index % sizeX, index / sizeX);
+uvec2 convertIndexToCoord(uint index, uint sizeX) {
+  return uvec2(index % sizeX, index / sizeX);
 }
 
-int getBucketIndex(int particleIndex, int particleTextureSizeX) {
-  return int(texelFetch(u_bucketTexture, ivec2(convertIndexToCoord(particleIndex, particleTextureSizeX)), 0).x);
+uint getBucketIndex(uint particleIndex, uint particleTextureSizeX) {
+  return texelFetch(u_bucketTexture, ivec2(convertIndexToCoord(particleIndex, particleTextureSizeX)), 0).x;
 }
 
 
-int binarySearchMinIndex(int target, int from, int to, int particleTextureSizeX) {
-  for (int i = 0; i < u_boidNumN + 1; i++) {
-    int middle = from + (to - from) / 2;
-    int bucketIndex = getBucketIndex(middle, particleTextureSizeX);
+uint binarySearchMinIndex(uint target, uint from, uint to, uint particleTextureSizeX) {
+  for (uint i = 0u; i < u_boidNumN + 1u; i++) {
+    uint middle = from + (to - from) / 2u;
+    uint bucketIndex = getBucketIndex(middle, particleTextureSizeX);
     if (bucketIndex < target) {
-      from = middle + 1;
+      from = middle + 1u;
     } else {
       to = middle;
     }
@@ -496,19 +489,19 @@ int binarySearchMinIndex(int target, int from, int to, int particleTextureSizeX)
       if (getBucketIndex(from, particleTextureSizeX) == target) {
         return from;
       } else {
-        return -1;
+        return MAX_32UI;
       }
     }
   }
-  return -1;
+  return MAX_32UI;
 }
 
-int binarySearchMaxIndex(int target, int from, int to, int particleTextureSizeX) {
-  for (int i = 0; i < u_boidNumN + 1; i++) {
-    int middle = from + (to - from) / 2 + 1;
-    int bucketIndex = getBucketIndex(middle, particleTextureSizeX);
+uint binarySearchMaxIndex(uint target, uint from, uint to, uint particleTextureSizeX) {
+  for (uint i = 0u; i < u_boidNumN + 1u; i++) {
+    uint middle = from + (to - from) / 2u + 1u;
+    uint bucketIndex = getBucketIndex(middle, particleTextureSizeX);
     if (bucketIndex > target) {
-      to = middle - 1;
+      to = middle - 1u;
     } else {
       from = middle;
     }
@@ -516,33 +509,33 @@ int binarySearchMaxIndex(int target, int from, int to, int particleTextureSizeX)
       if (getBucketIndex(from, particleTextureSizeX) == target) {
         return from;
       } else {
-        return -1;
+        return MAX_32UI;
       }
     }
   }
-  return -1;
+  return MAX_32UI;
 }
 
-ivec2 binarySearchRange(int target, int from, int to) {
-  int boidTextureSizeX = textureSize(u_bucketTexture, 0).x;
+uvec2 binarySearchRange(uint target, uint from, uint to) {
+  uint boidTextureSizeX = uint(textureSize(u_bucketTexture, 0).x);
   from =  binarySearchMinIndex(target, from, to, boidTextureSizeX);
-  to = from == -1 ? -1 : binarySearchMaxIndex(target, from, to, boidTextureSizeX);
-  return ivec2(from, to);
+  to = from == MAX_32UI ? MAX_32UI : binarySearchMaxIndex(target, from, to, boidTextureSizeX);
+  return uvec2(from, to);
 }
 
 void main(void) {
-  int bucketIndex = convertCoordToIndex(ivec2(gl_FragCoord.xy), u_bucketReferrerTextureSize.x);
-  int maxBucketIndex = int(u_bucketNum.x * u_bucketNum.y);
+  uint bucketIndex = convertCoordToIndex(uvec2(gl_FragCoord.xy), u_bucketReferrerTextureSize.x);
+  uint maxBucketIndex = u_bucketNum.x * u_bucketNum.y;
 
   if (bucketIndex >= maxBucketIndex) {
-    o_referrer = ivec2(-1, -1);
+    o_referrer = uvec2(MAX_32UI, MAX_32UI);
     return;
   }
 
-  ivec2 boidTextureSize = textureSize(u_bucketTexture, 0);
-  int boidNum = boidTextureSize.x * boidTextureSize.y;
+  uvec2 boidTextureSize = uvec2(textureSize(u_bucketTexture, 0));
+  uint boidNum = boidTextureSize.x * boidTextureSize.y;
 
-  o_referrer = binarySearchRange(bucketIndex, 0, boidNum - 1);
+  o_referrer = binarySearchRange(bucketIndex, 0u, boidNum - 1u);
 }
 `
 
@@ -651,7 +644,7 @@ void main(void) {
   function createBucketReferrerFramebuffer(gl, size) {
     const framebuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    const bucketReferrerTexture = createTexture(gl, size, gl.RG32I, gl.RG_INTEGER, gl.INT);
+    const bucketReferrerTexture = createTexture(gl, size, gl.RG32UI, gl.RG_INTEGER, gl.UNSIGNED_INT);
     gl.bindTexture(gl.TEXTURE_2D, bucketReferrerTexture);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bucketReferrerTexture, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -684,7 +677,7 @@ void main(void) {
   const initializeBoidUniforms = getUniformLocations(gl, initializeBoidProgram, ['u_randomSeed', 'u_boidNum', 'u_boidTextureSize', 'u_maxSpeed', 'u_simulationSpace']);
   const updateBoidUniforms = getUniformLocations(gl, updateBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_forceTexture', 'u_deltaTime', 'u_boidNum', 'u_boidTextureSize', 'u_maxSpeed', 'u_simulationSpace']);
   const computeForceUniforms = getUniformLocations(gl, computeForceProgram,
-    ['u_positionTexture', 'u_velocityTexture', 'u_bucketTexture', 'u_bucketReferrerTexture', 'u_boidNum', 'u_boidTextureSize', 'u_radius', 'u_weight', 'u_maxSpeed', 'u_maxForce', 'u_bucketSize', 'u_bucketNum', 'u_simulationSpace']);
+    ['u_positionTexture', 'u_velocityTexture', 'u_bucketTexture', 'u_bucketReferrerTexture', 'u_boidNum', 'u_radius', 'u_weight', 'u_maxSpeed', 'u_maxForce', 'u_boundaryIntensity', 'u_bucketSize', 'u_bucketNum', 'u_simulationSpace']);
   const renderBoidUniforms = getUniformLocations(gl, renderBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_canvasSize', 'u_simulationSpace', 'u_boidSize']);
   const initializeBucketUniforms = getUniformLocations(gl, initializeBucketProgram, ['u_positionTexture', 'u_bucketSize', 'u_boidNum', 'u_bucketNum']);
   const swapBucketIndexUniforms = getUniformLocations(gl, swapBucketIndexProgram, ['u_bucketTexture', 'u_size', 'u_blockStep', 'u_subBlockStep']);
@@ -698,8 +691,8 @@ void main(void) {
   const stats = new Stats();
   document.body.appendChild(stats.dom);
 
-  const MAX_BOID_NUM = 65536;
-　const MAX_BUCKET_NUM = 65535; // = 2^16 - 1
+  const MAX_BOID_NUM = 4294967295; // = 2^32 - 1
+　const MAX_BUCKET_NUM = 4294967295; // = 2^32 - 1
 
   const gui = new dat.GUI();
   const parameters = {
@@ -709,28 +702,30 @@ void main(void) {
       'cohesion weight': 1.0,
       'max speed': 0.05,
       'max force': 0.1,
+      'boundary intensity': 10.0,
       'boid size': 20.0,
     },
     static: {
-      'boid num': 1024,
+      'boid num': 4096,
       'separation radius': 0.05,
-      'alignment radius': 0.081,
-      'cohesion radius': 0.101,
+      'alignment radius': 0.075,
+      'cohesion radius': 0.10,
     },
     'reset': () => reset()
   };
   const dynamicFolder = gui.addFolder('dynamic parameters');
-  dynamicFolder.add(parameters.dynamic, 'separation weight', 0.0, 2.0);
-  dynamicFolder.add(parameters.dynamic, 'alignment weight', 0.0, 2.0);
-  dynamicFolder.add(parameters.dynamic, 'cohesion weight', 0.0, 2.0);
-  dynamicFolder.add(parameters.dynamic, 'max speed', 0.0, 1.0);
+  dynamicFolder.add(parameters.dynamic, 'separation weight', 0.0, 5.0);
+  dynamicFolder.add(parameters.dynamic, 'alignment weight', 0.0, 5.0);
+  dynamicFolder.add(parameters.dynamic, 'cohesion weight', 0.0, 5.0);
+  dynamicFolder.add(parameters.dynamic, 'max speed', 0.0, 0.2);
   dynamicFolder.add(parameters.dynamic, 'max force', 0.0, 1.0);
+  dynamicFolder.add(parameters.dynamic, 'boundary intensity', 0.0, 20.0);
   dynamicFolder.add(parameters.dynamic, 'boid size', 1.0, 50.0);
   const staticFolder = gui.addFolder('static parameters');
-  staticFolder.add(parameters.static, 'boid num', 1, MAX_BOID_NUM);
-  staticFolder.add(parameters.static, 'separation radius', 0.05, 0.1);
-  staticFolder.add(parameters.static, 'alignment radius', 0.05, 0.1);
-  staticFolder.add(parameters.static, 'cohesion radius', 0.05, 0.1);
+  staticFolder.add(parameters.static, 'boid num', 1, 16384);
+  staticFolder.add(parameters.static, 'separation radius', 0.01, 0.2);
+  staticFolder.add(parameters.static, 'alignment radius', 0.01, 0.2);
+  staticFolder.add(parameters.static, 'cohesion radius', 0.01, 0.2);
   gui.add(parameters, 'reset');
 
   let requestId = null;
@@ -841,8 +836,8 @@ void main(void) {
       gl.viewport(0.0, 0.0, bucketReferrerTextureSize, bucketReferrerTextureSize);
       gl.useProgram(initializeBucketReferrerProgram);
       setTextureAsUniform(gl, 0, bucketFbObjR.bucketTexture, initializeBucketReferrerUniforms['u_bucketTexture']);
-      gl.uniform1i(initializeBucketReferrerUniforms['u_boidNumN'], boidNumN);
-      gl.uniform2i(initializeBucketReferrerUniforms['u_bucketReferrerTextureSize'], bucketReferrerTextureSize, bucketReferrerTextureSize);
+      gl.uniform1ui(initializeBucketReferrerUniforms['u_boidNumN'], boidNumN);
+      gl.uniform2ui(initializeBucketReferrerUniforms['u_bucketReferrerTextureSize'], bucketReferrerTextureSize, bucketReferrerTextureSize);
       gl.uniform2ui(initializeBucketReferrerUniforms['u_bucketNum'], bucketNum.x, bucketNum.y);
       gl.bindVertexArray(fillScreenVao);
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
@@ -870,9 +865,9 @@ void main(void) {
       setTextureAsUniform(gl, 2, bucketFbObjR.bucketTexture, computeForceUniforms['u_bucketTexture']);
       setTextureAsUniform(gl, 3, bucketReferrerFbObj.bucketReferrerTexture, computeForceUniforms['u_bucketReferrerTexture']);
       gl.uniform1ui(computeForceUniforms['u_boidNum'], boidNum);
-      gl.uniform1ui(computeForceUniforms['u_boidTextureSize'], boidTextureSize);
       gl.uniform1f(computeForceUniforms['u_maxSpeed'], parameters.dynamic['max speed']);
       gl.uniform1f(computeForceUniforms['u_maxForce'], parameters.dynamic['max force']);
+      gl.uniform1f(computeForceUniforms['u_boundaryIntensity'], parameters.dynamic['boundary intensity']);
       gl.uniform1f(computeForceUniforms['u_bucketSize'], bucketSize);
       gl.uniform2i(computeForceUniforms['u_bucketNum'], bucketNum.x, bucketNum.y);
       gl.uniform2f(computeForceUniforms['u_simulationSpace'], simulationSpace.x, simulationSpace.y);
@@ -934,7 +929,6 @@ void main(void) {
       const currentTime = performance.now();
       const deltaTime = Math.min(0.05, (currentTime - previousTime) * 0.001);
       previousTime = currentTime;
-
 
       stepSimulation(deltaTime);
       renderBoids();
