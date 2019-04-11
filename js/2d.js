@@ -44,7 +44,7 @@ void main(void) {
   o_position = vec2(
     random(gl_FragCoord.xy * 0.013 + random(u_randomSeed * vec2(32.19, 27.51) * 1000.0)),
     random(gl_FragCoord.xy * 0.029 + random(u_randomSeed * vec2(19.56, 11.34) * 1000.0))
-  ) * u_simulationSpace;
+  ) * (u_simulationSpace - 1e-6) + 1e-6 * 0.5;
   o_velocity = normalize(vec2(
     random(gl_FragCoord.xy * 0.059 + random(u_randomSeed * vec2(27.31, 16.91) * 1000.0)),
     random(gl_FragCoord.xy * 0.038 + random(u_randomSeed * vec2(25.95, 19.47) * 1000.0))
@@ -97,18 +97,36 @@ void main(void) {
   vec2 nextVelocity = limit(velocity + u_deltaTime * force, u_maxSpeed);
   vec2 nextPosition = position + u_deltaTime * velocity;
 
-  if (nextPosition.x < 0.0) {
-    nextPosition.x += u_simulationSpace.x;
+
+  if (nextPosition.x < 1e-6) {
+    nextPosition.x = 1e-6;
+    nextVelocity.x *= -1.0;
   }
-  if (nextPosition.x > u_simulationSpace.x) {
-    nextPosition.x -= u_simulationSpace.x;
+  if (nextPosition.x > u_simulationSpace.x - 1e-6) {
+    nextPosition.x = u_simulationSpace.x - 1e-6;
+    nextVelocity.x *= -1.0;
   }
-  if (nextPosition.y < 0.0) {
-    nextPosition.y += u_simulationSpace.y;
+  if (nextPosition.y < 1e-6) {
+    nextPosition.y = 1e-6;
+    nextVelocity.y *= -1.0;
   }
-  if (nextPosition.y > u_simulationSpace.y) {
-    nextPosition.y -= u_simulationSpace.y;
+  if (nextPosition.y > u_simulationSpace.y - 1e-6) {
+    nextPosition.y = u_simulationSpace.y - 1e-6;
+    nextVelocity.y *= -1.0;
   }
+
+  // if (nextPosition.x < 0.0) {
+  //   nextPosition.x += u_simulationSpace.x;
+  // }
+  // if (nextPosition.x > u_simulationSpace.x) {
+  //   nextPosition.x -= u_simulationSpace.x;
+  // }
+  // if (nextPosition.y < 0.0) {
+  //   nextPosition.y += u_simulationSpace.y;
+  // }
+  // if (nextPosition.y > u_simulationSpace.y) {
+  //   nextPosition.y -= u_simulationSpace.y;
+  // }
 
   o_position = nextPosition;
   o_velocity = nextVelocity;
@@ -140,7 +158,7 @@ uniform uint u_boidTextureSize;
 uniform float u_bucketSize;
 uniform ivec2 u_bucketNum;
 
-// float simulationSpace = 1.0;
+uniform vec2 u_simulationSpace;
 
 uint convertCoordToIndex(uvec2 coord, uint sizeX) {
   return coord.x + sizeX * coord.y;
@@ -251,6 +269,25 @@ vec2 computeForce() {
   alignmentForce *= u_weight.y;
   cohesionForce *= u_weight.z;
 
+  vec2 forceFromBoids = separationForce + alignmentForce + cohesionForce;
+
+  float boundariesRadius = 0.05;
+
+  vec2 forceFromWalls = vec2(0.0);
+  if (position.x < boundariesRadius) {
+    forceFromWalls += vec2(u_maxForce, 0.0) / position.x;
+  }
+  if (u_simulationSpace.x - position.x < boundariesRadius) {
+    forceFromWalls += vec2(-u_maxForce, 0.0) / (u_simulationSpace.x - position.x);
+  }
+  if (position.y < boundariesRadius) {
+    forceFromWalls += vec2(0.0, u_maxForce) / position.y;
+  }
+  if (u_simulationSpace.y - position.y < boundariesRadius) {
+    forceFromWalls += vec2(0.0, -u_maxForce) / (u_simulationSpace.y - position.y);
+  }
+
+  return limit(forceFromBoids + forceFromWalls, u_maxForce);
   return separationForce + alignmentForce + cohesionForce;
 }
 
@@ -647,7 +684,7 @@ void main(void) {
   const initializeBoidUniforms = getUniformLocations(gl, initializeBoidProgram, ['u_randomSeed', 'u_boidNum', 'u_boidTextureSize', 'u_maxSpeed', 'u_simulationSpace']);
   const updateBoidUniforms = getUniformLocations(gl, updateBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_forceTexture', 'u_deltaTime', 'u_boidNum', 'u_boidTextureSize', 'u_maxSpeed', 'u_simulationSpace']);
   const computeForceUniforms = getUniformLocations(gl, computeForceProgram,
-    ['u_positionTexture', 'u_velocityTexture', 'u_bucketTexture', 'u_bucketReferrerTexture', 'u_boidNum', 'u_boidTextureSize', 'u_radius', 'u_weight', 'u_maxSpeed', 'u_maxForce', 'u_bucketSize', 'u_bucketNum']);
+    ['u_positionTexture', 'u_velocityTexture', 'u_bucketTexture', 'u_bucketReferrerTexture', 'u_boidNum', 'u_boidTextureSize', 'u_radius', 'u_weight', 'u_maxSpeed', 'u_maxForce', 'u_bucketSize', 'u_bucketNum', 'u_simulationSpace']);
   const renderBoidUniforms = getUniformLocations(gl, renderBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_canvasSize', 'u_simulationSpace', 'u_boidSize']);
   const initializeBucketUniforms = getUniformLocations(gl, initializeBucketProgram, ['u_positionTexture', 'u_bucketSize', 'u_boidNum', 'u_bucketNum']);
   const swapBucketIndexUniforms = getUniformLocations(gl, swapBucketIndexProgram, ['u_bucketTexture', 'u_size', 'u_blockStep', 'u_subBlockStep']);
@@ -671,7 +708,7 @@ void main(void) {
       'alignment weight': 1.0,
       'cohesion weight': 1.0,
       'max speed': 0.05,
-      'max force': 0.05,
+      'max force': 0.1,
       'boid size': 20.0,
     },
     static: {
@@ -838,6 +875,7 @@ void main(void) {
       gl.uniform1f(computeForceUniforms['u_maxForce'], parameters.dynamic['max force']);
       gl.uniform1f(computeForceUniforms['u_bucketSize'], bucketSize);
       gl.uniform2i(computeForceUniforms['u_bucketNum'], bucketNum.x, bucketNum.y);
+      gl.uniform2f(computeForceUniforms['u_simulationSpace'], simulationSpace.x, simulationSpace.y);
       gl.uniform3f(computeForceUniforms['u_radius'], separationRadius, alignmentRadius, cohesionRadius);
       gl.uniform3f(computeForceUniforms['u_weight'],
         parameters.dynamic['separation weight'], parameters.dynamic['alignment weight'], parameters.dynamic['cohesion weight']);
