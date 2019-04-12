@@ -210,6 +210,15 @@ class Matrix4 {
          - e[0] * e[13] * e[10] * e[7];
   }
 
+  static scale(x, y, z) {
+    return new Matrix4([
+      x, 0.0, 0.0, 0.0,
+      0.0, y, 0.0, 0.0,
+      0.0, 0.0, z, 0.0,
+      0.0, 0.0, 0.0, 1.0
+    ]);
+  }
+
   static inverse(m) {
     const d = m.determinant;
     if (Math.abs(d) <= 0.0) {
