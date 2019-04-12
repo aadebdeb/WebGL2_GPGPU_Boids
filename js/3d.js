@@ -2,9 +2,9 @@
 
   function createBoidMesh() {
     const p0 = new Vector3(0.0, 0.3, -1.2);
-    const p1 = new Vector3(-0.3, 0.3, 0.5);
-    const p2 = new Vector3(0.3, 0.3, 0.5);
-    const p3 = new Vector3(0.0, -0.5, 0.0);
+    const p1 = new Vector3(-0.5, 0.3, 0.8);
+    const p2 = new Vector3(0.5, 0.3, 0.5);
+    const p3 = new Vector3(0.0, -0.3, 0.0);
 
     const n0 = Vector3.cross(Vector3.sub(p1, p0), Vector3.sub(p2, p0)).norm();
     const n1 = Vector3.cross(Vector3.sub(p3, p0), Vector3.sub(p1, p0)).norm();
@@ -366,6 +366,7 @@ uniform sampler2D u_positionTexture;
 uniform sampler2D u_velocityTexture;
 uniform mat4 u_mvpMatrix;
 uniform vec3 u_simulationSpace;
+uniform float u_boidSize;
 
 ivec2 convertIndexToCoord(int index, int sizeX) {
   return ivec2(index % sizeX, index / sizeX);
@@ -389,7 +390,7 @@ void main(void) {
   ivec2 coord = convertIndexToCoord(gl_InstanceID, textureSize(u_positionTexture, 0).x);
   mat3 lookMat = getLookMat(coord);
   vec3 instancePosition = texelFetch(u_positionTexture, coord, 0).xyz;
-  vec3 position = lookMat * (i_position * 10.0) + (2.0 * instancePosition - u_simulationSpace) * 300.0;
+  vec3 position = lookMat * (i_position * u_boidSize) + (2.0 * instancePosition - u_simulationSpace) * 300.0;
 
   gl_Position = u_mvpMatrix * vec4(position, 1.0);
   v_normal = (u_mvpMatrix * vec4(i_normal, 0.0)).xyz;
@@ -407,13 +408,14 @@ out vec4 o_color;
 
 vec3 LightDir1 = normalize(vec3(1.0, 1.0, 1.0));
 vec3 LightDir2 = normalize(vec3(-0.8, -0.5, -1.0));
-
+vec3 LightDir3 = normalize(vec3(-0.3, 0.2, -0.7));
 
 void main(void) {
   vec3 normal = normalize(v_normal);
   vec3 diffuse1 = vec3(0.3) * max(0.0, dot(normal, LightDir1));
-  vec3 diffuse2 = vec3(0.15) * max(0.0, dot(normal, LightDir2));
-  o_color = vec4(diffuse1 + diffuse2, 1.0);
+  vec3 diffuse2 = vec3(0.2) * max(0.0, dot(normal, LightDir2));
+  vec3 diffuse3 = vec3(0.15) * max(0.0, dot(normal, LightDir3));
+  o_color = vec4(diffuse1 + diffuse2 + diffuse3, 1.0);
 }
 `
 
@@ -733,7 +735,7 @@ void main(void) {
   const updateBoidUniforms = getUniformLocations(gl, updateBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_forceTexture', 'u_deltaTime', 'u_boidNum', 'u_boidTextureSize', 'u_maxSpeed', 'u_simulationSpace']);
   const computeForceUniforms = getUniformLocations(gl, computeForceProgram,
     ['u_positionTexture', 'u_velocityTexture', 'u_bucketTexture', 'u_bucketReferrerTexture', 'u_boidNum', 'u_radius', 'u_weight', 'u_maxSpeed', 'u_maxForce', 'u_boundaryIntensity', 'u_bucketSize', 'u_bucketNum', 'u_simulationSpace']);
-  const renderBoidUniforms = getUniformLocations(gl, renderBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_mvpMatrix', 'u_simulationSpace']);
+  const renderBoidUniforms = getUniformLocations(gl, renderBoidProgram, ['u_positionTexture', 'u_velocityTexture', 'u_mvpMatrix', 'u_simulationSpace', 'u_boidSize']);
   const initializeBucketUniforms = getUniformLocations(gl, initializeBucketProgram, ['u_positionTexture', 'u_bucketSize', 'u_boidNum', 'u_bucketNum']);
   const swapBucketIndexUniforms = getUniformLocations(gl, swapBucketIndexProgram, ['u_bucketTexture', 'u_size', 'u_blockStep', 'u_subBlockStep']);
   const initializeBucketReferrerUniforms = getUniformLocations(gl, initializeBucketReferrerProgram, ['u_bucketTexture', 'u_bucketReferrerTextureSize', 'u_boidNumN', 'u_bucketNum']);
@@ -757,8 +759,8 @@ void main(void) {
       'cohesion weight': 1.0,
       'max speed': 0.05,
       'max force': 0.1,
-      'boundary intensity': 10.0,
-      'boid size': 20.0,
+      'boundary intensity': 30.0,
+      'boid size': 10.0,
     },
     static: {
       'boid num': 4096,
@@ -768,8 +770,8 @@ void main(void) {
     },
     camera: {
       'angle': -25.0,
-      'distance': 1500.0,
-      'height': 1000.0
+      'distance': 1000.0,
+      'height': 250.0
     },
     'reset': () => reset()
   };
@@ -779,7 +781,7 @@ void main(void) {
   dynamicFolder.add(parameters.dynamic, 'cohesion weight', 0.0, 5.0);
   dynamicFolder.add(parameters.dynamic, 'max speed', 0.0, 0.2);
   dynamicFolder.add(parameters.dynamic, 'max force', 0.0, 1.0);
-  dynamicFolder.add(parameters.dynamic, 'boundary intensity', 0.0, 20.0);
+  dynamicFolder.add(parameters.dynamic, 'boundary intensity', 0.0, 50.0);
   dynamicFolder.add(parameters.dynamic, 'boid size', 1.0, 50.0);
   const staticFolder = gui.addFolder('static parameters');
   staticFolder.add(parameters.static, 'boid num', 1, 16384);
@@ -993,6 +995,7 @@ void main(void) {
       setTextureAsUniform(gl, 1, boidFbObjR.velocityTexture, renderBoidUniforms['u_velocityTexture']);
       gl.uniformMatrix4fv(renderBoidUniforms['u_mvpMatrix'], false, mvpMatrix.elements);
       gl.uniform3f(renderBoidUniforms['u_simulationSpace'], simulationSpace.x, simulationSpace.y, simulationSpace.z);
+      gl.uniform1f(renderBoidUniforms['u_boidSize'], parameters.dynamic['boid size']);
 
       [boidPositionVbo, boidNormalVbo].forEach((vbo, i) => {
         gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
